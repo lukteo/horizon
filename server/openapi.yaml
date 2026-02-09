@@ -1,0 +1,117 @@
+openapi: 3.0.3
+info:
+  title: Horizon Security Analytics Platform API
+  description: API for the Horizon security analytics platform
+  version: 1.0.0
+servers:
+  - url: http://localhost:8000
+    description: Development server
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      responses:
+        '200':
+          description: Server is running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+  /api/v1/logs/ingest:
+    post:
+      summary: Ingest log entries
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestLogsRequest'
+      responses:
+        '200':
+          description: Successfully queued logs for processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+        '400':
+          description: Invalid request
+  /api/v1/mappings:
+    get:
+      summary: Get all log mappings
+      responses:
+        '200':
+          description: List of log mappings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+    post:
+      summary: Create a new log mapping
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMappingRequest'
+      responses:
+        '200':
+          description: Successfully created log mapping
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+  /api/v1/mappings/{id}:
+    get:
+      summary: Get a specific log mapping
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Log mapping details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+components:
+  schemas:
+    APIResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+        message:
+          type: string
+        error:
+          type: string
+    IngestLogsRequest:
+      type: object
+      required:
+        - logs
+      properties:
+        logs:
+          type: array
+          items:
+            type: object
+        source_type:
+          type: string
+    CreateMappingRequest:
+      type: object
+      required:
+        - name
+        - source_type
+        - mapping_config
+      properties:
+        name:
+          type: string
+        source_type:
+          type: string
+        mapping_config:
+          type: string
+          description: JSON string representing the mapping configuration
