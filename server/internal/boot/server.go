@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+
 	"github.com/luketeo/horizon/generated/oapi"
 	"github.com/luketeo/horizon/internal/config"
 	"github.com/luketeo/horizon/internal/middleware"

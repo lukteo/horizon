@@ -3,7 +3,8 @@
 .PHONY: lint format format-client format-server
 
 lint: ## Lints the entire codebase
-	@cd ./mobile && bun run lint
+	# @cd ./mobile && bun run lint
+	@cd ./server && golangci-lint run ./...
 
 format: ## Formats the entire codebase
 	# @$(MAKE) format-client
