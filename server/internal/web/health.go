@@ -1,4 +1,4 @@
-package api //nolint:revive // pf
+package web
 
 import (
 	"log/slog"
@@ -6,7 +6,7 @@ import (
 	"os"
 )
 
-func (a *API) GetHealth(w http.ResponseWriter, _ *http.Request) {
+func (h *Handler) GetHealth(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, err := w.Write([]byte("Health check successful"))
 	if err != nil {

@@ -8,7 +8,7 @@ import (
 	"github.com/clerk/clerk-sdk-go/v2"
 	clerkhttp "github.com/clerk/clerk-sdk-go/v2/http"
 	"github.com/clerk/clerk-sdk-go/v2/user"
-	"github.com/luketeo/horizon/config"
+	"github.com/luketeo/horizon/internal/config"
 )
 
 type contextKey string

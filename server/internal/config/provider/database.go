@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"os"
 
-	_ "github.com/lib/pq"
+	_ "github.com/lib/pq" // needed for pg driver
 )
 
 func NewDBProvider(env *EnvProvider) *sql.DB {

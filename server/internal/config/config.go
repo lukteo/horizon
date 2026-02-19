@@ -7,7 +7,7 @@ import (
 	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/clerk/clerk-sdk-go/v2/user"
 
-	"github.com/luketeo/horizon/config/provider"
+	"github.com/luketeo/horizon/internal/config/provider"
 )
 
 type Config struct {

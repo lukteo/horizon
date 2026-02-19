@@ -9,26 +9,26 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
-	"github.com/luketeo/horizon/config"
 	"github.com/luketeo/horizon/generated/oapi"
-	"github.com/luketeo/horizon/internal/api"
+	"github.com/luketeo/horizon/internal/config"
 	"github.com/luketeo/horizon/internal/middleware"
+	"github.com/luketeo/horizon/internal/web"
 )
 
-type API struct {
+type Server struct {
 	router   *chi.Mux
 	portAddr string
 }
 
-func NewAPI(config *config.Config) *API {
-	api := api.NewAPI(config)
+func NewServer(config *config.Config) *Server {
+	h := web.NewHandler(config)
 	portAddr := fmt.Sprintf(":%s", config.Env().ServerPort())
 
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 
-	r.Get("/health", api.GetHealth)
+	r.Get("/health", h.GetHealth)
 	r.Group(func(r chi.Router) {
 		baseURL := ""
 
@@ -47,7 +47,7 @@ func NewAPI(config *config.Config) *API {
 			},
 		}
 		strictHandler := oapi.NewStrictHandlerWithOptions(
-			api,
+			h,
 			[]oapi.StrictMiddlewareFunc{},
 			serverOptions,
 		)
@@ -55,30 +55,30 @@ func NewAPI(config *config.Config) *API {
 		oapi.HandlerFromMuxWithBaseURL(strictHandler, r, baseURL)
 	})
 
-	return &API{
+	return &Server{
 		router:   r,
 		portAddr: portAddr,
 	}
 }
 
-func (ab *API) Start() {
-	slog.Default().Info("Server listening on " + ab.portAddr)
+func (s *Server) Start() {
+	slog.Default().Info("Server listening on " + s.portAddr)
 
 	headerTimeout := 1000
 	httpServer := &http.Server{
-		Handler:           ab.router,
-		Addr:              ab.portAddr,
+		Handler:           s.router,
+		Addr:              s.portAddr,
 		ReadHeaderTimeout: time.Duration(headerTimeout) * time.Second,
 	}
 
 	err := httpServer.ListenAndServe()
 	if err != nil {
 		slog.Default().
-			Error("Error starting server on "+ab.portAddr, slog.Any("err", err))
+			Error("Error starting server on "+s.portAddr, slog.Any("err", err))
 		os.Exit(1)
 	}
 }
 
-func (ab *API) Router() *chi.Mux {
-	return ab.router
+func (s *Server) Router() *chi.Mux {
+	return s.router
 }
