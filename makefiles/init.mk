@@ -9,11 +9,11 @@ init: ## Set up all required development tools for local use
 	@echo "[2/3] Initializing server dependencies..."
 	@$(MAKE) init-server
 	@echo "[3/3] Initializing client dependencies..."
-	# @$(MAKE) init-client
+	@$(MAKE) init-client
 	@echo "Initialization complete!"
 
 init-client: ## Initializes client dependencies
-	@cd ./mobile && \
+	@cd ./client && \
 		if [ ! -f .env.local ]; then \
 			echo "• Creating .env.local file..."; \
 			cp .env.local.example .env.local; \
