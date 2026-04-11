@@ -2,12 +2,14 @@ openapi: 3.0.0
 info:
   title: Horizon API
   version: 1.0.0
+
 paths:
+  # ─── Users ────────────────────────────────────────────────────────────────
   /users/me:
     get:
+      operationId: GetUsersMe
       summary: Get current user profile
-      tags:
-        - Users
+      tags: [Users]
       responses:
         '200':
           description: OK
@@ -17,14 +19,314 @@ paths:
                 $ref: '#/components/schemas/User'
         '401':
           $ref: '#/components/responses/Unauthorized'
+    patch:
+      operationId: UpdateUsersMe
+      summary: Update current user profile
+      tags: [Users]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ─── Organizations ─────────────────────────────────────────────────────────
+  /organizations:
+    get:
+      operationId: ListOrganizations
+      summary: List organizations the current user belongs to
+      tags: [Organizations]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Organization'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      operationId: CreateOrganization
+      summary: Create a new organization
+      tags: [Organizations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrganizationRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /organizations/{orgId}:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+    get:
+      operationId: GetOrganization
+      summary: Get organization details
+      tags: [Organizations]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      operationId: UpdateOrganization
+      summary: Update organization details (admin or owner only)
+      tags: [Organizations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateOrganizationRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  # ─── Members ───────────────────────────────────────────────────────────────
+  /organizations/{orgId}/members:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+    get:
+      operationId: ListOrganizationMembers
+      summary: List all members of an organization
+      tags: [Members]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OrganizationMember'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      operationId: AddOrganizationMember
+      summary: Add a user to an organization by email (admin or owner only)
+      tags: [Members]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddMemberRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrganizationMember'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /organizations/{orgId}/members/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      operationId: UpdateOrganizationMember
+      summary: Update a member's role (admin or owner only)
+      tags: [Members]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMemberRoleRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrganizationMember'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: RemoveOrganizationMember
+      summary: Remove a member from an organization (admin or owner only)
+      tags: [Members]
+      responses:
+        '204':
+          description: No Content
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
 
+  # ─── API Keys ──────────────────────────────────────────────────────────────
+  /organizations/{orgId}/api-keys:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+    get:
+      operationId: ListApiKeys
+      summary: List API keys for an organization
+      tags: [ApiKeys]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiKey'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      operationId: CreateApiKey
+      summary: Create a new API key (admin or owner only) — key value returned once only
+      tags: [ApiKeys]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateApiKeyRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedApiKey'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /organizations/{orgId}/api-keys/{keyId}:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+      - name: keyId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      operationId: RevokeApiKey
+      summary: Revoke an API key (admin or owner only)
+      tags: [ApiKeys]
+      responses:
+        '204':
+          description: No Content
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+# ─── Components ──────────────────────────────────────────────────────────────
 components:
+  parameters:
+    OrgId:
+      name: orgId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
   responses:
-    # Reusable responses to keep the paths clean
+    BadRequest:
+      description: Invalid request body or parameters
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
     Unauthorized:
       description: Authentication is required
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+    Forbidden:
+      description: Insufficient permissions for this action
       content:
         application/problem+json:
           schema:
@@ -35,24 +337,23 @@ components:
         application/problem+json:
           schema:
             $ref: '#/components/schemas/ProblemDetails'
+    Conflict:
+      description: Resource already exists or state conflict
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
 
   schemas:
+    # ── Shared ──────────────────────────────────────────────────────────────
     BaseEntity:
       type: object
       required: [id, created_at, updated_at]
       properties:
-        id: { type: string, format: uuid }
+        id:         { type: string, format: uuid }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
-    User:
-      allOf:
-        - $ref: '#/components/schemas/BaseEntity'
-        - type: object
-          properties:
-            email: { type: string, format: email }
-
-    # The RFC 9457 Compliant Schema
     ProblemDetails:
       type: object
       properties:
@@ -89,3 +390,123 @@ components:
         message:
           type: string
           description: A description of why the field failed validation.
+
+    # ── Users ────────────────────────────────────────────────────────────────
+    User:
+      allOf:
+        - $ref: '#/components/schemas/BaseEntity'
+        - type: object
+          required: [email]
+          properties:
+            email:         { type: string, format: email }
+            first_name:    { type: string, nullable: true }
+            last_name:     { type: string, nullable: true }
+            avatar_url:    { type: string, nullable: true }
+            last_login_at: { type: string, format: date-time, nullable: true }
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        first_name: { type: string, maxLength: 100 }
+        last_name:  { type: string, maxLength: 100 }
+
+    # ── Organizations ────────────────────────────────────────────────────────
+    OrgRole:
+      type: string
+      enum: [owner, admin, analyst, viewer]
+      description: Role of a user within an organization.
+
+    Organization:
+      allOf:
+        - $ref: '#/components/schemas/BaseEntity'
+        - type: object
+          required: [name, slug, plan]
+          properties:
+            name:         { type: string }
+            slug:         { type: string }
+            plan:         { type: string }
+            member_count: { type: integer }
+            my_role:      { $ref: '#/components/schemas/OrgRole' }
+
+    CreateOrganizationRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        slug:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '^[a-z0-9-]+$'
+          description: URL-safe identifier. Auto-generated from name if omitted.
+
+    UpdateOrganizationRequest:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+
+    # ── Members ──────────────────────────────────────────────────────────────
+    OrganizationMember:
+      allOf:
+        - $ref: '#/components/schemas/BaseEntity'
+        - type: object
+          required: [org_id, user_id, role]
+          properties:
+            org_id:  { type: string, format: uuid }
+            user_id: { type: string, format: uuid }
+            role:    { $ref: '#/components/schemas/OrgRole' }
+            user:    { $ref: '#/components/schemas/User' }
+
+    AddMemberRequest:
+      type: object
+      required: [email, role]
+      properties:
+        email: { type: string, format: email }
+        role:  { $ref: '#/components/schemas/OrgRole' }
+
+    UpdateMemberRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role: { $ref: '#/components/schemas/OrgRole' }
+
+    # ── API Keys ─────────────────────────────────────────────────────────────
+    ApiKey:
+      allOf:
+        - $ref: '#/components/schemas/BaseEntity'
+        - type: object
+          required: [org_id, name, scopes]
+          properties:
+            org_id:       { type: string, format: uuid }
+            name:         { type: string }
+            scopes:
+              type: array
+              items: { type: string }
+            last_used_at: { type: string, format: date-time, nullable: true }
+            revoked_at:   { type: string, format: date-time, nullable: true }
+
+    CreateApiKeyRequest:
+      type: object
+      required: [name, scopes]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        scopes:
+          type: array
+          items: { type: string }
+          description: 'Allowed values: ingest, read'
+
+    CreatedApiKey:
+      allOf:
+        - $ref: '#/components/schemas/ApiKey'
+        - type: object
+          required: [key]
+          properties:
+            key:
+              type: string
+              description: The raw API key. Only returned once on creation — store it securely.
