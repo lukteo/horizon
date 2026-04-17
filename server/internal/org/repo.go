@@ -5,11 +5,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
+	"github.com/go-jet/jet/v2/postgres"
+	"github.com/go-jet/jet/v2/qrm"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 
+	"github.com/luketeo/horizon/generated/horizon/public/model"
+	"github.com/luketeo/horizon/generated/horizon/public/table"
 	"github.com/luketeo/horizon/generated/oapi"
 )
 
@@ -22,6 +26,92 @@ type Repo struct {
 func NewRepo(db *sql.DB) *Repo {
 	return &Repo{db: db}
 }
+
+// ── Scan targets & mappers ───────────────────────────────────────────────────
+
+// orgWithMembership carries an org row plus the caller's membership role and
+// the total member count. The embedded model.Organizations captures all
+// organizations.* columns; MyRole and MemberCount come in via explicit aliases.
+type orgWithMembership struct {
+	model.Organizations
+	MyRole      string
+	MemberCount int32
+}
+
+func (o orgWithMembership) toOapi() oapi.Organization {
+	role := oapi.OrgRole(o.MyRole)
+	count := int(o.MemberCount)
+	return oapi.Organization{
+		Id:          o.ID,
+		Name:        o.Name,
+		Slug:        o.Slug,
+		Plan:        o.Plan,
+		MyRole:      &role,
+		MemberCount: &count,
+		CreatedAt:   o.CreatedAt,
+		UpdatedAt:   o.UpdatedAt,
+	}
+}
+
+// memberWithUser carries a membership row with its embedded user row.
+type memberWithUser struct {
+	model.OrganizationMembers
+	User model.Users
+}
+
+func (m memberWithUser) toOapi() oapi.OrganizationMember {
+	user := oapi.User{
+		Id:          m.User.ID,
+		Email:       openapi_types.Email(m.User.Email),
+		FirstName:   m.User.FirstName,
+		LastName:    m.User.LastName,
+		AvatarUrl:   m.User.AvatarURL,
+		LastLoginAt: m.User.LastLoginAt,
+		CreatedAt:   m.User.CreatedAt,
+		UpdatedAt:   m.User.UpdatedAt,
+	}
+	return oapi.OrganizationMember{
+		Id:        m.ID,
+		OrgId:     m.OrgID,
+		UserId:    m.UserID,
+		Role:      oapi.OrgRole(m.Role),
+		User:      &user,
+		CreatedAt: m.CreatedAt,
+		UpdatedAt: m.UpdatedAt,
+	}
+}
+
+func userModelToOapi(u model.Users) oapi.User {
+	return oapi.User{
+		Id:          u.ID,
+		Email:       openapi_types.Email(u.Email),
+		FirstName:   u.FirstName,
+		LastName:    u.LastName,
+		AvatarUrl:   u.AvatarURL,
+		LastLoginAt: u.LastLoginAt,
+		CreatedAt:   u.CreatedAt,
+		UpdatedAt:   u.UpdatedAt,
+	}
+}
+
+// memberCountsSubquery builds a subquery selecting (org_id, member_count) for
+// use as a LEFT JOIN on organizations.
+func memberCountsSubquery() (postgres.SelectTable, postgres.ColumnString, postgres.ColumnInteger) {
+	orgIDProj := table.OrganizationMembers.OrgID.AS("org_id")
+	countProj := postgres.COUNT(postgres.STAR).AS("count")
+
+	sub := postgres.
+		SELECT(orgIDProj, countProj).
+		FROM(table.OrganizationMembers).
+		GROUP_BY(table.OrganizationMembers.OrgID).
+		AsTable("mc")
+
+	return sub,
+		postgres.StringColumn("org_id").From(sub),
+		postgres.IntegerColumn("count").From(sub)
+}
+
+// ── Organizations ────────────────────────────────────────────────────────────
 
 // CreateOrgWithOwner inserts an organisation and its owner membership in one
 // transaction, retrying on slug unique-violations with `<base>-2`, `<base>-3`, …
@@ -38,25 +128,30 @@ func (r *Repo) CreateOrgWithOwner(
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	const insertOrg = `
-		INSERT INTO organizations (name, slug, plan, settings)
-		VALUES ($1, $2, 'free', '{}')
-		RETURNING id, created_at, updated_at
-	`
+	insertStmtFor := func(slug string) postgres.InsertStatement {
+		return table.Organizations.
+			INSERT(
+				table.Organizations.Name,
+				table.Organizations.Slug,
+				table.Organizations.Plan,
+				table.Organizations.Settings,
+			).
+			VALUES(name, slug, "free", "{}").
+			RETURNING(
+				table.Organizations.ID,
+				table.Organizations.CreatedAt,
+				table.Organizations.UpdatedAt,
+			)
+	}
 
-	var (
-		orgID     uuid.UUID
-		createdAt time.Time
-		updatedAt time.Time
-	)
+	var inserted model.Organizations
 
 	slug := baseSlug
 	for i := range 10 {
 		if _, err = tx.ExecContext(ctx, "SAVEPOINT insert_org"); err != nil {
 			return oapi.Organization{}, fmt.Errorf("savepoint: %w", err)
 		}
-		err = tx.QueryRowContext(ctx, insertOrg, name, slug).
-			Scan(&orgID, &createdAt, &updatedAt)
+		err = insertStmtFor(slug).QueryContext(ctx, tx, &inserted)
 		if err == nil {
 			if _, relErr := tx.ExecContext(ctx, "RELEASE SAVEPOINT insert_org"); relErr != nil {
 				return oapi.Organization{}, fmt.Errorf("release savepoint: %w", relErr)
@@ -77,10 +172,15 @@ func (r *Repo) CreateOrgWithOwner(
 		return oapi.Organization{}, fmt.Errorf("inserting org (all retries exhausted): %w", err)
 	}
 
-	if _, err = tx.ExecContext(ctx,
-		`INSERT INTO organization_members (org_id, user_id, role) VALUES ($1, $2, 'owner')`,
-		orgID, creatorID,
-	); err != nil {
+	memberInsert := table.OrganizationMembers.
+		INSERT(
+			table.OrganizationMembers.OrgID,
+			table.OrganizationMembers.UserID,
+			table.OrganizationMembers.Role,
+		).
+		VALUES(inserted.ID, creatorID, string(oapi.Owner))
+
+	if _, err = memberInsert.ExecContext(ctx, tx); err != nil {
 		return oapi.Organization{}, fmt.Errorf("adding creator as owner: %w", err)
 	}
 
@@ -91,14 +191,14 @@ func (r *Repo) CreateOrgWithOwner(
 	role := oapi.Owner
 	count := 1
 	return oapi.Organization{
-		Id:          orgID,
+		Id:          inserted.ID,
 		Name:        name,
 		Slug:        slug,
 		Plan:        "free",
 		MemberCount: &count,
 		MyRole:      &role,
-		CreatedAt:   createdAt,
-		UpdatedAt:   updatedAt,
+		CreatedAt:   inserted.CreatedAt,
+		UpdatedAt:   inserted.UpdatedAt,
 	}, nil
 }
 
@@ -108,38 +208,35 @@ func (r *Repo) ListForUser(
 	ctx context.Context,
 	userID uuid.UUID,
 ) ([]oapi.Organization, error) {
-	const q = `
-		SELECT o.id, o.name, o.slug, o.plan, o.created_at, o.updated_at,
-		       om.role,
-		       (SELECT COUNT(*)::int FROM organization_members m WHERE m.org_id = o.id) AS member_count
-		FROM organizations o
-		JOIN organization_members om ON o.id = om.org_id AND om.user_id = $1
-		ORDER BY o.created_at DESC
-	`
-	rows, err := r.db.QueryContext(ctx, q, userID)
-	if err != nil {
+	mcSub, mcOrgID, mcCount := memberCountsSubquery()
+
+	stmt := postgres.
+		SELECT(
+			table.Organizations.AllColumns,
+			table.OrganizationMembers.Role.AS("my_role"),
+			mcCount.AS("member_count"),
+		).
+		FROM(
+			table.Organizations.
+				INNER_JOIN(
+					table.OrganizationMembers,
+					table.Organizations.ID.EQ(table.OrganizationMembers.OrgID).
+						AND(table.OrganizationMembers.UserID.EQ(postgres.UUID(userID))),
+				).
+				LEFT_JOIN(mcSub, mcOrgID.EQ(table.Organizations.ID)),
+		).
+		ORDER_BY(table.Organizations.CreatedAt.DESC())
+
+	var rows []orgWithMembership
+	if err := stmt.QueryContext(ctx, r.db, &rows); err != nil {
 		return nil, fmt.Errorf("listing orgs: %w", err)
 	}
-	defer rows.Close()
 
-	var orgs []oapi.Organization
-	for rows.Next() {
-		var (
-			o           oapi.Organization
-			role        oapi.OrgRole
-			memberCount int
-		)
-		if err := rows.Scan(
-			&o.Id, &o.Name, &o.Slug, &o.Plan, &o.CreatedAt, &o.UpdatedAt,
-			&role, &memberCount,
-		); err != nil {
-			return nil, fmt.Errorf("scanning org row: %w", err)
-		}
-		o.MyRole = &role
-		o.MemberCount = &memberCount
-		orgs = append(orgs, o)
+	orgs := make([]oapi.Organization, 0, len(rows))
+	for _, row := range rows {
+		orgs = append(orgs, row.toOapi())
 	}
-	return orgs, rows.Err()
+	return orgs, nil
 }
 
 // GetForUser returns the org together with the user's role. Returns ErrNotFound
@@ -148,42 +245,49 @@ func (r *Repo) GetForUser(
 	ctx context.Context,
 	orgID, userID uuid.UUID,
 ) (oapi.Organization, error) {
-	const q = `
-		SELECT o.id, o.name, o.slug, o.plan, o.created_at, o.updated_at,
-		       om.role,
-		       (SELECT COUNT(*)::int FROM organization_members m WHERE m.org_id = o.id) AS member_count
-		FROM organizations o
-		JOIN organization_members om ON o.id = om.org_id AND om.user_id = $2
-		WHERE o.id = $1
-	`
-	var (
-		o           oapi.Organization
-		role        oapi.OrgRole
-		memberCount int
-	)
-	err := r.db.QueryRowContext(ctx, q, orgID, userID).Scan(
-		&o.Id, &o.Name, &o.Slug, &o.Plan, &o.CreatedAt, &o.UpdatedAt,
-		&role, &memberCount,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return oapi.Organization{}, ErrNotFound
-	}
-	if err != nil {
+	mcSub, mcOrgID, mcCount := memberCountsSubquery()
+
+	stmt := postgres.
+		SELECT(
+			table.Organizations.AllColumns,
+			table.OrganizationMembers.Role.AS("my_role"),
+			mcCount.AS("member_count"),
+		).
+		FROM(
+			table.Organizations.
+				INNER_JOIN(
+					table.OrganizationMembers,
+					table.Organizations.ID.EQ(table.OrganizationMembers.OrgID).
+						AND(table.OrganizationMembers.UserID.EQ(postgres.UUID(userID))),
+				).
+				LEFT_JOIN(mcSub, mcOrgID.EQ(table.Organizations.ID)),
+		).
+		WHERE(table.Organizations.ID.EQ(postgres.UUID(orgID))).
+		LIMIT(1)
+
+	var row orgWithMembership
+	if err := stmt.QueryContext(ctx, r.db, &row); err != nil {
+		if errors.Is(err, qrm.ErrNoRows) {
+			return oapi.Organization{}, ErrNotFound
+		}
 		return oapi.Organization{}, fmt.Errorf("getting org: %w", err)
 	}
-	o.MyRole = &role
-	o.MemberCount = &memberCount
-	return o, nil
+	return row.toOapi(), nil
 }
 
 // UpdateName patches the org's name. A nil name leaves the column unchanged.
 func (r *Repo) UpdateName(ctx context.Context, orgID uuid.UUID, name *string) error {
-	_, err := r.db.ExecContext(
-		ctx,
-		`UPDATE organizations SET name = COALESCE($1, name), updated_at = NOW() WHERE id = $2`,
-		name, orgID,
-	)
-	if err != nil {
+	nameExpr := postgres.StringExpression(table.Organizations.Name)
+	if name != nil {
+		nameExpr = postgres.String(*name)
+	}
+
+	stmt := table.Organizations.
+		UPDATE(table.Organizations.Name, table.Organizations.UpdatedAt).
+		SET(nameExpr, postgres.NOW()).
+		WHERE(table.Organizations.ID.EQ(postgres.UUID(orgID)))
+
+	if _, err := stmt.ExecContext(ctx, r.db); err != nil {
 		return fmt.Errorf("updating org: %w", err)
 	}
 	return nil
@@ -194,18 +298,23 @@ func (r *Repo) GetMembership(
 	ctx context.Context,
 	orgID, userID uuid.UUID,
 ) (oapi.OrgRole, error) {
-	var role oapi.OrgRole
-	err := r.db.QueryRowContext(ctx,
-		`SELECT role FROM organization_members WHERE org_id = $1 AND user_id = $2`,
-		orgID, userID,
-	).Scan(&role)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", ErrNotFound
-	}
-	if err != nil {
+	stmt := postgres.
+		SELECT(table.OrganizationMembers.Role).
+		FROM(table.OrganizationMembers).
+		WHERE(
+			table.OrganizationMembers.OrgID.EQ(postgres.UUID(orgID)).
+				AND(table.OrganizationMembers.UserID.EQ(postgres.UUID(userID))),
+		).
+		LIMIT(1)
+
+	var row model.OrganizationMembers
+	if err := stmt.QueryContext(ctx, r.db, &row); err != nil {
+		if errors.Is(err, qrm.ErrNoRows) {
+			return "", ErrNotFound
+		}
 		return "", fmt.Errorf("getting membership: %w", err)
 	}
-	return role, nil
+	return oapi.OrgRole(row.Role), nil
 }
 
 // ListMembers returns every member of the org with its embedded user row.
@@ -213,49 +322,46 @@ func (r *Repo) ListMembers(
 	ctx context.Context,
 	orgID uuid.UUID,
 ) ([]oapi.OrganizationMember, error) {
-	const q = `
-		SELECT om.id, om.org_id, om.user_id, om.role, om.created_at, om.updated_at,
-		       u.id, u.email, u.first_name, u.last_name, u.avatar_url, u.last_login_at, u.created_at, u.updated_at
-		FROM organization_members om
-		JOIN users u ON om.user_id = u.id
-		WHERE om.org_id = $1
-		ORDER BY om.created_at ASC
-	`
-	rows, err := r.db.QueryContext(ctx, q, orgID)
-	if err != nil {
+	stmt := postgres.
+		SELECT(
+			table.OrganizationMembers.AllColumns,
+			table.Users.AllColumns,
+		).
+		FROM(
+			table.OrganizationMembers.
+				INNER_JOIN(table.Users, table.Users.ID.EQ(table.OrganizationMembers.UserID)),
+		).
+		WHERE(table.OrganizationMembers.OrgID.EQ(postgres.UUID(orgID))).
+		ORDER_BY(table.OrganizationMembers.CreatedAt.ASC())
+
+	var rows []memberWithUser
+	if err := stmt.QueryContext(ctx, r.db, &rows); err != nil {
 		return nil, fmt.Errorf("listing members: %w", err)
 	}
-	defer rows.Close()
 
-	var members []oapi.OrganizationMember
-	for rows.Next() {
-		var (
-			m oapi.OrganizationMember
-			u oapi.User
-		)
-		if err := rows.Scan(
-			&m.Id, &m.OrgId, &m.UserId, &m.Role, &m.CreatedAt, &m.UpdatedAt,
-			&u.Id, &u.Email, &u.FirstName, &u.LastName, &u.AvatarUrl, &u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scanning member row: %w", err)
-		}
-		m.User = &u
-		members = append(members, m)
+	members := make([]oapi.OrganizationMember, 0, len(rows))
+	for _, row := range rows {
+		members = append(members, row.toOapi())
 	}
-	return members, rows.Err()
+	return members, nil
 }
 
 // FindUserIDByEmail resolves an email to its internal user id.
 func (r *Repo) FindUserIDByEmail(ctx context.Context, email string) (uuid.UUID, error) {
-	var id uuid.UUID
-	err := r.db.QueryRowContext(ctx, `SELECT id FROM users WHERE email = $1`, email).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return uuid.Nil, ErrNotFound
-	}
-	if err != nil {
+	stmt := postgres.
+		SELECT(table.Users.ID).
+		FROM(table.Users).
+		WHERE(table.Users.Email.EQ(postgres.String(email))).
+		LIMIT(1)
+
+	var row model.Users
+	if err := stmt.QueryContext(ctx, r.db, &row); err != nil {
+		if errors.Is(err, qrm.ErrNoRows) {
+			return uuid.Nil, ErrNotFound
+		}
 		return uuid.Nil, fmt.Errorf("looking up user by email: %w", err)
 	}
-	return id, nil
+	return row.ID, nil
 }
 
 // InsertMember adds a user to an org at the given role. Returns ErrConflict on
@@ -265,22 +371,31 @@ func (r *Repo) InsertMember(
 	orgID, userID uuid.UUID,
 	role oapi.OrgRole,
 ) (oapi.OrganizationMember, error) {
-	const q = `
-		INSERT INTO organization_members (org_id, user_id, role)
-		VALUES ($1, $2, $3)
-		RETURNING id, org_id, user_id, role, created_at, updated_at
-	`
-	var m oapi.OrganizationMember
-	err := r.db.QueryRowContext(ctx, q, orgID, userID, role).
-		Scan(&m.Id, &m.OrgId, &m.UserId, &m.Role, &m.CreatedAt, &m.UpdatedAt)
-	if err != nil {
+	stmt := table.OrganizationMembers.
+		INSERT(
+			table.OrganizationMembers.OrgID,
+			table.OrganizationMembers.UserID,
+			table.OrganizationMembers.Role,
+		).
+		VALUES(orgID, userID, string(role)).
+		RETURNING(table.OrganizationMembers.AllColumns)
+
+	var row model.OrganizationMembers
+	if err := stmt.QueryContext(ctx, r.db, &row); err != nil {
 		var pgErr *pq.Error
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return oapi.OrganizationMember{}, ErrConflict
 		}
 		return oapi.OrganizationMember{}, fmt.Errorf("inserting member: %w", err)
 	}
-	return m, nil
+	return oapi.OrganizationMember{
+		Id:        row.ID,
+		OrgId:     row.OrgID,
+		UserId:    row.UserID,
+		Role:      oapi.OrgRole(row.Role),
+		CreatedAt: row.CreatedAt,
+		UpdatedAt: row.UpdatedAt,
+	}, nil
 }
 
 // UpdateMemberRole mutates an existing membership's role.
@@ -289,29 +404,42 @@ func (r *Repo) UpdateMemberRole(
 	orgID, userID uuid.UUID,
 	role oapi.OrgRole,
 ) (oapi.OrganizationMember, error) {
-	const q = `
-		UPDATE organization_members SET role = $1, updated_at = NOW()
-		WHERE org_id = $2 AND user_id = $3
-		RETURNING id, org_id, user_id, role, created_at, updated_at
-	`
-	var m oapi.OrganizationMember
-	err := r.db.QueryRowContext(ctx, q, role, orgID, userID).
-		Scan(&m.Id, &m.OrgId, &m.UserId, &m.Role, &m.CreatedAt, &m.UpdatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return oapi.OrganizationMember{}, ErrNotFound
-	}
-	if err != nil {
+	stmt := table.OrganizationMembers.
+		UPDATE(table.OrganizationMembers.Role, table.OrganizationMembers.UpdatedAt).
+		SET(postgres.String(string(role)), postgres.NOW()).
+		WHERE(
+			table.OrganizationMembers.OrgID.EQ(postgres.UUID(orgID)).
+				AND(table.OrganizationMembers.UserID.EQ(postgres.UUID(userID))),
+		).
+		RETURNING(table.OrganizationMembers.AllColumns)
+
+	var row model.OrganizationMembers
+	if err := stmt.QueryContext(ctx, r.db, &row); err != nil {
+		if errors.Is(err, qrm.ErrNoRows) {
+			return oapi.OrganizationMember{}, ErrNotFound
+		}
 		return oapi.OrganizationMember{}, fmt.Errorf("updating member role: %w", err)
 	}
-	return m, nil
+	return oapi.OrganizationMember{
+		Id:        row.ID,
+		OrgId:     row.OrgID,
+		UserId:    row.UserID,
+		Role:      oapi.OrgRole(row.Role),
+		CreatedAt: row.CreatedAt,
+		UpdatedAt: row.UpdatedAt,
+	}, nil
 }
 
 // RemoveMember deletes a membership. Returns ErrNotFound when no row matched.
 func (r *Repo) RemoveMember(ctx context.Context, orgID, userID uuid.UUID) error {
-	res, err := r.db.ExecContext(ctx,
-		`DELETE FROM organization_members WHERE org_id = $1 AND user_id = $2`,
-		orgID, userID,
-	)
+	stmt := table.OrganizationMembers.
+		DELETE().
+		WHERE(
+			table.OrganizationMembers.OrgID.EQ(postgres.UUID(orgID)).
+				AND(table.OrganizationMembers.UserID.EQ(postgres.UUID(userID))),
+		)
+
+	res, err := stmt.ExecContext(ctx, r.db)
 	if err != nil {
 		return fmt.Errorf("removing member: %w", err)
 	}
@@ -324,18 +452,18 @@ func (r *Repo) RemoveMember(ctx context.Context, orgID, userID uuid.UUID) error 
 
 // GetUser loads a single user row for embedding into a member response.
 func (r *Repo) GetUser(ctx context.Context, userID uuid.UUID) (oapi.User, error) {
-	const q = `
-		SELECT id, email, first_name, last_name, avatar_url, last_login_at, created_at, updated_at
-		FROM users WHERE id = $1
-	`
-	var u oapi.User
-	if err := r.db.QueryRowContext(ctx, q, userID).Scan(
-		&u.Id, &u.Email, &u.FirstName, &u.LastName, &u.AvatarUrl, &u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt,
-	); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+	stmt := postgres.
+		SELECT(table.Users.AllColumns).
+		FROM(table.Users).
+		WHERE(table.Users.ID.EQ(postgres.UUID(userID))).
+		LIMIT(1)
+
+	var row model.Users
+	if err := stmt.QueryContext(ctx, r.db, &row); err != nil {
+		if errors.Is(err, qrm.ErrNoRows) {
 			return oapi.User{}, ErrNotFound
 		}
 		return oapi.User{}, fmt.Errorf("getting user: %w", err)
 	}
-	return u, nil
+	return userModelToOapi(row), nil
 }
