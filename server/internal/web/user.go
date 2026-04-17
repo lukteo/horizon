@@ -4,7 +4,8 @@ import (
 	"context"
 
 	"github.com/luketeo/horizon/generated/oapi"
-	"github.com/luketeo/horizon/internal/middleware"
+	"github.com/luketeo/horizon/internal/platform/httpx"
+	"github.com/luketeo/horizon/internal/platform/middleware"
 )
 
 func (h *Handler) GetUsersMe(
@@ -15,7 +16,7 @@ func (h *Handler) GetUsersMe(
 	if !ok {
 		return oapi.GetUsersMe401ApplicationProblemPlusJSONResponse{
 			UnauthorizedApplicationProblemPlusJSONResponse: oapi.UnauthorizedApplicationProblemPlusJSONResponse(
-				prob(401, "Unauthorized", "Missing authentication context"),
+				httpx.Prob(401, "Unauthorized", "Missing authentication context"),
 			),
 		}, nil
 	}
@@ -36,7 +37,7 @@ func (h *Handler) UpdateUsersMe(
 	if !ok {
 		return oapi.UpdateUsersMe401ApplicationProblemPlusJSONResponse{
 			UnauthorizedApplicationProblemPlusJSONResponse: oapi.UnauthorizedApplicationProblemPlusJSONResponse(
-				prob(401, "Unauthorized", "Missing authentication context"),
+				httpx.Prob(401, "Unauthorized", "Missing authentication context"),
 			),
 		}, nil
 	}

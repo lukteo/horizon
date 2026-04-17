@@ -7,42 +7,13 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/luketeo/horizon/generated/oapi"
-	"github.com/luketeo/horizon/internal/middleware"
+	"github.com/luketeo/horizon/internal/platform/authz"
+	"github.com/luketeo/horizon/internal/platform/httpx"
+	"github.com/luketeo/horizon/internal/platform/middleware"
 	"github.com/luketeo/horizon/internal/services/orgservice"
 )
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-// prob constructs an RFC 9457 ProblemDetails value.
-func prob(status int, title, detail string) oapi.ProblemDetails {
-	t := "about:blank"
-	return oapi.ProblemDetails{
-		Type:   &t,
-		Status: &status,
-		Title:  &title,
-		Detail: &detail,
-	}
-}
-
-// roleLevel maps an OrgRole to a numeric level for comparison.
-func roleLevel(role oapi.OrgRole) int {
-	switch role {
-	case oapi.Owner:
-		return 4
-	case oapi.Admin:
-		return 3
-	case oapi.Analyst:
-		return 2
-	case oapi.Viewer:
-		return 1
-	}
-	return 0
-}
-
-// hasRole returns true if actual meets or exceeds required.
-func hasRole(actual, required oapi.OrgRole) bool {
-	return roleLevel(actual) >= roleLevel(required)
-}
 
 // requireUser returns the internal PG user UUID for the authenticated Clerk user,
 // upserting the user record on first access.
@@ -85,7 +56,7 @@ func (h *Handler) ListOrganizations(
 	if !ok {
 		return oapi.ListOrganizations401ApplicationProblemPlusJSONResponse{
 			UnauthorizedApplicationProblemPlusJSONResponse: oapi.UnauthorizedApplicationProblemPlusJSONResponse(
-				prob(401, "Unauthorized", "Authentication required"),
+				httpx.Prob(401, "Unauthorized", "Authentication required"),
 			),
 		}, nil
 	}
@@ -108,7 +79,7 @@ func (h *Handler) CreateOrganization(
 	if !ok {
 		return oapi.CreateOrganization401ApplicationProblemPlusJSONResponse{
 			UnauthorizedApplicationProblemPlusJSONResponse: oapi.UnauthorizedApplicationProblemPlusJSONResponse(
-				prob(401, "Unauthorized", "Authentication required"),
+				httpx.Prob(401, "Unauthorized", "Authentication required"),
 			),
 		}, nil
 	}
@@ -118,7 +89,7 @@ func (h *Handler) CreateOrganization(
 		if errors.Is(err, orgservice.ErrConflict) {
 			return oapi.CreateOrganization409ApplicationProblemPlusJSONResponse{
 				ConflictApplicationProblemPlusJSONResponse: oapi.ConflictApplicationProblemPlusJSONResponse(
-					prob(409, "Conflict", "An organisation with that slug already exists"),
+					httpx.Prob(409, "Conflict", "An organisation with that slug already exists"),
 				),
 			}, nil
 		}
@@ -137,7 +108,7 @@ func (h *Handler) GetOrganization(
 		// Could be unauthenticated or not a member — return 403 for both to avoid enumeration.
 		return oapi.GetOrganization403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
-				prob(403, "Forbidden", "You are not a member of this organisation"),
+				httpx.Prob(403, "Forbidden", "You are not a member of this organisation"),
 			),
 		}, nil
 	}
@@ -148,7 +119,7 @@ func (h *Handler) GetOrganization(
 		if errors.Is(err, orgservice.ErrNotFound) {
 			return oapi.GetOrganization404ApplicationProblemPlusJSONResponse{
 				NotFoundApplicationProblemPlusJSONResponse: oapi.NotFoundApplicationProblemPlusJSONResponse(
-					prob(404, "Not Found", "Organisation not found"),
+					httpx.Prob(404, "Not Found", "Organisation not found"),
 				),
 			}, nil
 		}
@@ -166,14 +137,14 @@ func (h *Handler) UpdateOrganization(
 	if !ok {
 		return oapi.UpdateOrganization403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
-				prob(403, "Forbidden", "You are not a member of this organisation"),
+				httpx.Prob(403, "Forbidden", "You are not a member of this organisation"),
 			),
 		}, nil
 	}
-	if !hasRole(role, oapi.Admin) {
+	if !authz.HasRole(role, oapi.Admin) {
 		return oapi.UpdateOrganization403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
-				prob(403, "Forbidden", "Admin or owner role required"),
+				httpx.Prob(403, "Forbidden", "Admin or owner role required"),
 			),
 		}, nil
 	}
@@ -183,7 +154,7 @@ func (h *Handler) UpdateOrganization(
 		if errors.Is(err, orgservice.ErrNotFound) {
 			return oapi.UpdateOrganization404ApplicationProblemPlusJSONResponse{
 				NotFoundApplicationProblemPlusJSONResponse: oapi.NotFoundApplicationProblemPlusJSONResponse(
-					prob(404, "Not Found", "Organisation not found"),
+					httpx.Prob(404, "Not Found", "Organisation not found"),
 				),
 			}, nil
 		}
@@ -203,7 +174,7 @@ func (h *Handler) ListOrganizationMembers(
 	if !ok {
 		return oapi.ListOrganizationMembers403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
-				prob(403, "Forbidden", "You are not a member of this organisation"),
+				httpx.Prob(403, "Forbidden", "You are not a member of this organisation"),
 			),
 		}, nil
 	}
@@ -226,14 +197,14 @@ func (h *Handler) AddOrganizationMember(
 	if !ok {
 		return oapi.AddOrganizationMember403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
-				prob(403, "Forbidden", "You are not a member of this organisation"),
+				httpx.Prob(403, "Forbidden", "You are not a member of this organisation"),
 			),
 		}, nil
 	}
-	if !hasRole(role, oapi.Admin) {
+	if !authz.HasRole(role, oapi.Admin) {
 		return oapi.AddOrganizationMember403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
-				prob(403, "Forbidden", "Admin or owner role required"),
+				httpx.Prob(403, "Forbidden", "Admin or owner role required"),
 			),
 		}, nil
 	}
@@ -249,13 +220,17 @@ func (h *Handler) AddOrganizationMember(
 		case errors.Is(err, orgservice.ErrNotFound):
 			return oapi.AddOrganizationMember404ApplicationProblemPlusJSONResponse{
 				NotFoundApplicationProblemPlusJSONResponse: oapi.NotFoundApplicationProblemPlusJSONResponse(
-					prob(404, "Not Found", "No user with that email address exists in Horizon"),
+					httpx.Prob(
+						404,
+						"Not Found",
+						"No user with that email address exists in Horizon",
+					),
 				),
 			}, nil
 		case errors.Is(err, orgservice.ErrConflict):
 			return oapi.AddOrganizationMember409ApplicationProblemPlusJSONResponse{
 				ConflictApplicationProblemPlusJSONResponse: oapi.ConflictApplicationProblemPlusJSONResponse(
-					prob(409, "Conflict", "User is already a member of this organisation"),
+					httpx.Prob(409, "Conflict", "User is already a member of this organisation"),
 				),
 			}, nil
 		}
@@ -273,14 +248,14 @@ func (h *Handler) UpdateOrganizationMember(
 	if !ok {
 		return oapi.UpdateOrganizationMember403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
-				prob(403, "Forbidden", "You are not a member of this organisation"),
+				httpx.Prob(403, "Forbidden", "You are not a member of this organisation"),
 			),
 		}, nil
 	}
-	if !hasRole(role, oapi.Admin) {
+	if !authz.HasRole(role, oapi.Admin) {
 		return oapi.UpdateOrganizationMember403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
-				prob(403, "Forbidden", "Admin or owner role required"),
+				httpx.Prob(403, "Forbidden", "Admin or owner role required"),
 			),
 		}, nil
 	}
@@ -290,7 +265,7 @@ func (h *Handler) UpdateOrganizationMember(
 		if errors.Is(err, orgservice.ErrNotFound) {
 			return oapi.UpdateOrganizationMember404ApplicationProblemPlusJSONResponse{
 				NotFoundApplicationProblemPlusJSONResponse: oapi.NotFoundApplicationProblemPlusJSONResponse(
-					prob(404, "Not Found", "Member not found"),
+					httpx.Prob(404, "Not Found", "Member not found"),
 				),
 			}, nil
 		}
@@ -308,14 +283,14 @@ func (h *Handler) RemoveOrganizationMember(
 	if !ok {
 		return oapi.RemoveOrganizationMember403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
-				prob(403, "Forbidden", "You are not a member of this organisation"),
+				httpx.Prob(403, "Forbidden", "You are not a member of this organisation"),
 			),
 		}, nil
 	}
-	if !hasRole(role, oapi.Admin) {
+	if !authz.HasRole(role, oapi.Admin) {
 		return oapi.RemoveOrganizationMember403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
-				prob(403, "Forbidden", "Admin or owner role required"),
+				httpx.Prob(403, "Forbidden", "Admin or owner role required"),
 			),
 		}, nil
 	}
@@ -324,7 +299,7 @@ func (h *Handler) RemoveOrganizationMember(
 		if errors.Is(err, orgservice.ErrNotFound) {
 			return oapi.RemoveOrganizationMember404ApplicationProblemPlusJSONResponse{
 				NotFoundApplicationProblemPlusJSONResponse: oapi.NotFoundApplicationProblemPlusJSONResponse(
-					prob(404, "Not Found", "Member not found"),
+					httpx.Prob(404, "Not Found", "Member not found"),
 				),
 			}, nil
 		}
@@ -344,14 +319,14 @@ func (h *Handler) ListApiKeys(
 	if !ok {
 		return oapi.ListApiKeys403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
-				prob(403, "Forbidden", "You are not a member of this organisation"),
+				httpx.Prob(403, "Forbidden", "You are not a member of this organisation"),
 			),
 		}, nil
 	}
-	if !hasRole(role, oapi.Admin) {
+	if !authz.HasRole(role, oapi.Admin) {
 		return oapi.ListApiKeys403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
-				prob(403, "Forbidden", "Admin or owner role required to view API keys"),
+				httpx.Prob(403, "Forbidden", "Admin or owner role required to view API keys"),
 			),
 		}, nil
 	}
@@ -374,14 +349,14 @@ func (h *Handler) CreateApiKey(
 	if !ok {
 		return oapi.CreateApiKey403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
-				prob(403, "Forbidden", "You are not a member of this organisation"),
+				httpx.Prob(403, "Forbidden", "You are not a member of this organisation"),
 			),
 		}, nil
 	}
-	if !hasRole(role, oapi.Admin) {
+	if !authz.HasRole(role, oapi.Admin) {
 		return oapi.CreateApiKey403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
-				prob(403, "Forbidden", "Admin or owner role required"),
+				httpx.Prob(403, "Forbidden", "Admin or owner role required"),
 			),
 		}, nil
 	}
@@ -402,14 +377,14 @@ func (h *Handler) RevokeApiKey(
 	if !ok {
 		return oapi.RevokeApiKey403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
-				prob(403, "Forbidden", "You are not a member of this organisation"),
+				httpx.Prob(403, "Forbidden", "You are not a member of this organisation"),
 			),
 		}, nil
 	}
-	if !hasRole(role, oapi.Admin) {
+	if !authz.HasRole(role, oapi.Admin) {
 		return oapi.RevokeApiKey403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
-				prob(403, "Forbidden", "Admin or owner role required"),
+				httpx.Prob(403, "Forbidden", "Admin or owner role required"),
 			),
 		}, nil
 	}
@@ -418,7 +393,7 @@ func (h *Handler) RevokeApiKey(
 		if errors.Is(err, orgservice.ErrNotFound) {
 			return oapi.RevokeApiKey404ApplicationProblemPlusJSONResponse{
 				NotFoundApplicationProblemPlusJSONResponse: oapi.NotFoundApplicationProblemPlusJSONResponse(
-					prob(404, "Not Found", "API key not found"),
+					httpx.Prob(404, "Not Found", "API key not found"),
 				),
 			}, nil
 		}
