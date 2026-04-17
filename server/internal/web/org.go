@@ -22,7 +22,7 @@ func (h *Handler) requireUser(ctx context.Context) (uuid.UUID, bool) {
 	if !ok {
 		return uuid.Nil, false
 	}
-	_, userID, err := h.orgSvc.GetOrCreateUser(ctx, clerkUser)
+	_, userID, err := h.userSvc.GetOrCreateUser(ctx, clerkUser)
 	if err != nil {
 		return uuid.Nil, false
 	}

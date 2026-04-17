@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
@@ -63,103 +62,6 @@ func generateAPIKey() (rawKey, keyHash string, err error) {
 	h := sha256.Sum256([]byte(rawKey))
 	keyHash = hex.EncodeToString(h[:])
 	return rawKey, keyHash, nil
-}
-
-// primaryEmail extracts the primary email address from a Clerk user.
-func primaryEmail(u *clerk.User) string {
-	for _, ea := range u.EmailAddresses {
-		if u.PrimaryEmailAddressID != nil && ea.ID == *u.PrimaryEmailAddressID {
-			return ea.EmailAddress
-		}
-	}
-	if len(u.EmailAddresses) > 0 {
-		return u.EmailAddresses[0].EmailAddress
-	}
-	return ""
-}
-
-// scanUser maps a row of user columns into an oapi.User.
-// Expected column order: id, email, first_name, last_name, avatar_url, last_login_at, created_at, updated_at
-func scanUser(dest *oapi.User, scanner interface {
-	Scan(dest ...any) error
-}) error {
-	return scanner.Scan(
-		&dest.Id, &dest.Email, &dest.FirstName, &dest.LastName,
-		&dest.AvatarUrl, &dest.LastLoginAt, &dest.CreatedAt, &dest.UpdatedAt,
-	)
-}
-
-// ── Users ────────────────────────────────────────────────────────────────────
-
-// GetOrCreateUser upserts a Clerk user into the local users table and returns
-// the internal record along with the internal UUID.
-func (s *Service) GetOrCreateUser(
-	ctx context.Context,
-	clerkUser *clerk.User,
-) (oapi.User, uuid.UUID, error) {
-	email := primaryEmail(clerkUser)
-
-	var imgURL *string
-	if clerkUser.ImageURL != nil && *clerkUser.ImageURL != "" {
-		imgURL = clerkUser.ImageURL
-	}
-
-	const q = `
-		INSERT INTO users (clerk_id, email, first_name, last_name, avatar_url, last_login_at)
-		VALUES ($1, $2, $3, $4, $5, NOW())
-		ON CONFLICT (clerk_id) DO UPDATE
-		SET email         = EXCLUDED.email,
-		    first_name    = COALESCE(EXCLUDED.first_name, users.first_name),
-		    last_name     = COALESCE(EXCLUDED.last_name,  users.last_name),
-		    avatar_url    = COALESCE(EXCLUDED.avatar_url, users.avatar_url),
-		    last_login_at = NOW(),
-		    updated_at    = NOW()
-		RETURNING id, email, first_name, last_name, avatar_url, last_login_at, created_at, updated_at
-	`
-	var u oapi.User
-	if err := scanUser(&u, s.db.QueryRowContext(ctx, q,
-		clerkUser.ID, email, clerkUser.FirstName, clerkUser.LastName, imgURL,
-	)); err != nil {
-		return oapi.User{}, uuid.Nil, fmt.Errorf("upserting user: %w", err)
-	}
-	return u, u.Id, nil
-}
-
-// UpdateUser updates mutable profile fields for the user.
-func (s *Service) UpdateUser(
-	ctx context.Context,
-	userID uuid.UUID,
-	firstName, lastName *string,
-) (oapi.User, error) {
-	const q = `
-		UPDATE users SET
-		    first_name = COALESCE($1, first_name),
-		    last_name  = COALESCE($2, last_name),
-		    updated_at = NOW()
-		WHERE id = $3
-		RETURNING id, email, first_name, last_name, avatar_url, last_login_at, created_at, updated_at
-	`
-	var u oapi.User
-	if err := scanUser(&u, s.db.QueryRowContext(ctx, q, firstName, lastName, userID)); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return oapi.User{}, ErrNotFound
-		}
-		return oapi.User{}, fmt.Errorf("updating user: %w", err)
-	}
-	return u, nil
-}
-
-// GetUserIDByClerkID returns the internal PG UUID for a Clerk user ID.
-func (s *Service) GetUserIDByClerkID(ctx context.Context, clerkID string) (uuid.UUID, error) {
-	var id uuid.UUID
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM users WHERE clerk_id = $1`, clerkID).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return uuid.Nil, ErrNotFound
-	}
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("looking up user by clerk_id: %w", err)
-	}
-	return id, nil
 }
 
 // ── Organizations ─────────────────────────────────────────────────────────────

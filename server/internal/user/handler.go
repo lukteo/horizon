@@ -1,4 +1,4 @@
-package web
+package user
 
 import (
 	"context"
@@ -8,6 +8,20 @@ import (
 	"github.com/luketeo/horizon/internal/platform/middleware"
 )
 
+// Handler exposes the /users/me HTTP endpoints.
+type Handler struct {
+	svc *Service
+}
+
+// NewHandler wires a Handler with its user service.
+func NewHandler(svc *Service) *Handler {
+	return &Handler{svc: svc}
+}
+
+// Service returns the underlying service so other domains can resolve identity.
+func (h *Handler) Service() *Service { return h.svc }
+
+// GetUsersMe returns the authenticated user's profile, upserting on first access.
 func (h *Handler) GetUsersMe(
 	ctx context.Context,
 	_ oapi.GetUsersMeRequestObject,
@@ -21,14 +35,14 @@ func (h *Handler) GetUsersMe(
 		}, nil
 	}
 
-	user, _, err := h.orgSvc.GetOrCreateUser(ctx, clerkUser)
+	u, _, err := h.svc.GetOrCreateUser(ctx, clerkUser)
 	if err != nil {
 		return nil, err
 	}
-
-	return oapi.GetUsersMe200JSONResponse(user), nil
+	return oapi.GetUsersMe200JSONResponse(u), nil
 }
 
+// UpdateUsersMe updates the authenticated user's mutable profile fields.
 func (h *Handler) UpdateUsersMe(
 	ctx context.Context,
 	request oapi.UpdateUsersMeRequestObject,
@@ -42,15 +56,14 @@ func (h *Handler) UpdateUsersMe(
 		}, nil
 	}
 
-	_, userID, err := h.orgSvc.GetOrCreateUser(ctx, clerkUser)
+	_, userID, err := h.svc.GetOrCreateUser(ctx, clerkUser)
 	if err != nil {
 		return nil, err
 	}
 
-	user, err := h.orgSvc.UpdateUser(ctx, userID, request.Body.FirstName, request.Body.LastName)
+	u, err := h.svc.UpdateUser(ctx, userID, request.Body.FirstName, request.Body.LastName)
 	if err != nil {
 		return nil, err
 	}
-
-	return oapi.UpdateUsersMe200JSONResponse(user), nil
+	return oapi.UpdateUsersMe200JSONResponse(u), nil
 }
