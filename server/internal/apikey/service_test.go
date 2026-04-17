@@ -15,8 +15,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/luketeo/horizon/internal/apikey"
+	"github.com/luketeo/horizon/internal/org"
 	"github.com/luketeo/horizon/internal/platform/testhelper"
-	"github.com/luketeo/horizon/internal/services/orgservice"
 	"github.com/luketeo/horizon/internal/user"
 )
 
@@ -47,12 +47,12 @@ func seedOrg(t *testing.T, db *sql.DB, clerkID, orgName string) uuid.UUID {
 	if err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
-	orgSvc := orgservice.New(db)
-	org, err := orgSvc.CreateOrg(ctx, orgName, nil, userID)
+	orgSvc := org.NewService(org.NewRepo(db), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	o, err := orgSvc.CreateOrg(ctx, orgName, nil, userID)
 	if err != nil {
 		t.Fatalf("seed org: %v", err)
 	}
-	return org.Id
+	return o.Id
 }
 
 func newSeededService(t *testing.T) (*apikey.Service, uuid.UUID) {

@@ -10,9 +10,9 @@ import (
 
 	"github.com/luketeo/horizon/generated/oapi"
 	"github.com/luketeo/horizon/internal/apikey"
+	"github.com/luketeo/horizon/internal/org"
 	"github.com/luketeo/horizon/internal/platform/middleware"
 	"github.com/luketeo/horizon/internal/platform/testhelper"
-	"github.com/luketeo/horizon/internal/services/orgservice"
 	"github.com/luketeo/horizon/internal/user"
 )
 
@@ -25,7 +25,7 @@ func newSeededHandler(t *testing.T) (*apikey.Handler, oapi.Organization) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	userSvc := user.NewService(user.NewRepo(db), logger)
-	orgSvc := orgservice.New(db)
+	orgSvc := org.NewService(org.NewRepo(db), logger)
 	_, userID, err := userSvc.GetOrCreateUser(
 		ctx,
 		fakeClerkUser("user_apikey_handler_owner", "ownr@example.com"),
@@ -33,13 +33,13 @@ func newSeededHandler(t *testing.T) (*apikey.Handler, oapi.Organization) {
 	if err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
-	org, err := orgSvc.CreateOrg(ctx, "Apikey Handler Org", nil, userID)
+	o, err := orgSvc.CreateOrg(ctx, "Apikey Handler Org", nil, userID)
 	if err != nil {
 		t.Fatalf("seed org: %v", err)
 	}
 
 	svc := apikey.NewService(apikey.NewRepo(db), logger)
-	return apikey.NewHandler(svc, userSvc, orgSvc), org
+	return apikey.NewHandler(svc, userSvc, orgSvc), o
 }
 
 func TestListApiKeys_UnauthenticatedReturnsForbidden(t *testing.T) {

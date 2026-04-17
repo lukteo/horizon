@@ -13,7 +13,7 @@ test-db-up: ## Ensures the test database exists and has the latest migrations ap
 test-server: test-db-up ## Runs the server Go test suite against the test database
 	@$(call use_env,local) \
 		&& cd ./server \
-		&& go test ./...
+		&& go test -p 1 ./...
 
 test-db-reset: ## Drops and recreates the test database (WARNING - destructive)
 	@$(call use_env,local) \

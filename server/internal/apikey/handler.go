@@ -7,24 +7,24 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/luketeo/horizon/generated/oapi"
+	"github.com/luketeo/horizon/internal/org"
 	"github.com/luketeo/horizon/internal/platform/authz"
 	"github.com/luketeo/horizon/internal/platform/httpx"
 	"github.com/luketeo/horizon/internal/platform/middleware"
-	"github.com/luketeo/horizon/internal/services/orgservice"
 	"github.com/luketeo/horizon/internal/user"
 )
 
 // Handler serves the /organizations/{orgId}/api-keys/* endpoints. It reaches
-// into user.Service for identity and orgservice.Service for membership role
-// checks — the two cross-domain dependencies handlers are allowed to take.
+// into user.Service for identity and org.Service for membership role checks —
+// the two cross-domain dependencies handlers are allowed to take.
 type Handler struct {
 	svc     *Service
 	userSvc *user.Service
-	orgSvc  *orgservice.Service
+	orgSvc  *org.Service
 }
 
 // NewHandler wires a Handler with the services it needs.
-func NewHandler(svc *Service, userSvc *user.Service, orgSvc *orgservice.Service) *Handler {
+func NewHandler(svc *Service, userSvc *user.Service, orgSvc *org.Service) *Handler {
 	return &Handler{svc: svc, userSvc: userSvc, orgSvc: orgSvc}
 }
 

@@ -1,4 +1,4 @@
-package web
+package org
 
 import (
 	"context"
@@ -10,13 +10,23 @@ import (
 	"github.com/luketeo/horizon/internal/platform/authz"
 	"github.com/luketeo/horizon/internal/platform/httpx"
 	"github.com/luketeo/horizon/internal/platform/middleware"
-	"github.com/luketeo/horizon/internal/services/orgservice"
+	"github.com/luketeo/horizon/internal/user"
 )
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// Handler serves /orgs/* and /orgs/{id}/members/*. It depends on its own
+// Service and on user.Service for identity resolution (Clerk → internal UUID).
+type Handler struct {
+	svc     *Service
+	userSvc *user.Service
+}
 
-// requireUser returns the internal PG user UUID for the authenticated Clerk user,
-// upserting the user record on first access.
+// NewHandler wires a Handler with the services it needs.
+func NewHandler(svc *Service, userSvc *user.Service) *Handler {
+	return &Handler{svc: svc, userSvc: userSvc}
+}
+
+// requireUser resolves the authenticated Clerk user to an internal user UUID,
+// upserting the record on first access.
 func (h *Handler) requireUser(ctx context.Context) (uuid.UUID, bool) {
 	clerkUser, ok := middleware.GetClerkUserFromContext(ctx)
 	if !ok {
@@ -29,8 +39,8 @@ func (h *Handler) requireUser(ctx context.Context) (uuid.UUID, bool) {
 	return userID, true
 }
 
-// requireMembership returns (userID, role) for the authenticated user in orgID.
-// Returns (uuid.Nil, "", false) if the user is not authenticated or not a member.
+// requireMembership returns (userID, role, true) for an authenticated member of
+// orgID, or zero values and false for unauthenticated/non-member callers.
 func (h *Handler) requireMembership(
 	ctx context.Context,
 	orgID uuid.UUID,
@@ -39,14 +49,14 @@ func (h *Handler) requireMembership(
 	if !ok {
 		return uuid.Nil, "", false
 	}
-	role, err := h.orgSvc.GetMembership(ctx, orgID, userID)
+	role, err := h.svc.GetMembership(ctx, orgID, userID)
 	if err != nil {
 		return uuid.Nil, "", false
 	}
 	return userID, role, true
 }
 
-// ── Organizations ─────────────────────────────────────────────────────────────
+// ── Organizations ────────────────────────────────────────────────────────────
 
 func (h *Handler) ListOrganizations(
 	ctx context.Context,
@@ -61,7 +71,7 @@ func (h *Handler) ListOrganizations(
 		}, nil
 	}
 
-	orgs, err := h.orgSvc.ListOrgsForUser(ctx, userID)
+	orgs, err := h.svc.ListOrgsForUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -84,9 +94,9 @@ func (h *Handler) CreateOrganization(
 		}, nil
 	}
 
-	org, err := h.orgSvc.CreateOrg(ctx, request.Body.Name, request.Body.Slug, userID)
+	o, err := h.svc.CreateOrg(ctx, request.Body.Name, request.Body.Slug, userID)
 	if err != nil {
-		if errors.Is(err, orgservice.ErrConflict) {
+		if errors.Is(err, ErrConflict) {
 			return oapi.CreateOrganization409ApplicationProblemPlusJSONResponse{
 				ConflictApplicationProblemPlusJSONResponse: oapi.ConflictApplicationProblemPlusJSONResponse(
 					httpx.Prob(409, "Conflict", "An organisation with that slug already exists"),
@@ -95,28 +105,25 @@ func (h *Handler) CreateOrganization(
 		}
 		return nil, err
 	}
-
-	return oapi.CreateOrganization201JSONResponse(org), nil
+	return oapi.CreateOrganization201JSONResponse(o), nil
 }
 
 func (h *Handler) GetOrganization(
 	ctx context.Context,
 	request oapi.GetOrganizationRequestObject,
 ) (oapi.GetOrganizationResponseObject, error) {
-	userID, role, ok := h.requireMembership(ctx, request.OrgId)
+	userID, _, ok := h.requireMembership(ctx, request.OrgId)
 	if !ok {
-		// Could be unauthenticated or not a member — return 403 for both to avoid enumeration.
 		return oapi.GetOrganization403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
 				httpx.Prob(403, "Forbidden", "You are not a member of this organisation"),
 			),
 		}, nil
 	}
-	_ = role // membership is sufficient to view
 
-	org, err := h.orgSvc.GetOrgForUser(ctx, request.OrgId, userID)
+	o, err := h.svc.GetOrgForUser(ctx, request.OrgId, userID)
 	if err != nil {
-		if errors.Is(err, orgservice.ErrNotFound) {
+		if errors.Is(err, ErrNotFound) {
 			return oapi.GetOrganization404ApplicationProblemPlusJSONResponse{
 				NotFoundApplicationProblemPlusJSONResponse: oapi.NotFoundApplicationProblemPlusJSONResponse(
 					httpx.Prob(404, "Not Found", "Organisation not found"),
@@ -125,8 +132,7 @@ func (h *Handler) GetOrganization(
 		}
 		return nil, err
 	}
-
-	return oapi.GetOrganization200JSONResponse(org), nil
+	return oapi.GetOrganization200JSONResponse(o), nil
 }
 
 func (h *Handler) UpdateOrganization(
@@ -149,9 +155,9 @@ func (h *Handler) UpdateOrganization(
 		}, nil
 	}
 
-	org, err := h.orgSvc.UpdateOrg(ctx, request.OrgId, request.Body.Name, userID)
+	o, err := h.svc.UpdateOrg(ctx, request.OrgId, request.Body.Name, userID)
 	if err != nil {
-		if errors.Is(err, orgservice.ErrNotFound) {
+		if errors.Is(err, ErrNotFound) {
 			return oapi.UpdateOrganization404ApplicationProblemPlusJSONResponse{
 				NotFoundApplicationProblemPlusJSONResponse: oapi.NotFoundApplicationProblemPlusJSONResponse(
 					httpx.Prob(404, "Not Found", "Organisation not found"),
@@ -160,18 +166,16 @@ func (h *Handler) UpdateOrganization(
 		}
 		return nil, err
 	}
-
-	return oapi.UpdateOrganization200JSONResponse(org), nil
+	return oapi.UpdateOrganization200JSONResponse(o), nil
 }
 
-// ── Members ───────────────────────────────────────────────────────────────────
+// ── Members ──────────────────────────────────────────────────────────────────
 
 func (h *Handler) ListOrganizationMembers(
 	ctx context.Context,
 	request oapi.ListOrganizationMembersRequestObject,
 ) (oapi.ListOrganizationMembersResponseObject, error) {
-	_, _, ok := h.requireMembership(ctx, request.OrgId)
-	if !ok {
+	if _, _, ok := h.requireMembership(ctx, request.OrgId); !ok {
 		return oapi.ListOrganizationMembers403ApplicationProblemPlusJSONResponse{
 			ForbiddenApplicationProblemPlusJSONResponse: oapi.ForbiddenApplicationProblemPlusJSONResponse(
 				httpx.Prob(403, "Forbidden", "You are not a member of this organisation"),
@@ -179,7 +183,7 @@ func (h *Handler) ListOrganizationMembers(
 		}, nil
 	}
 
-	members, err := h.orgSvc.ListMembers(ctx, request.OrgId)
+	members, err := h.svc.ListMembers(ctx, request.OrgId)
 	if err != nil {
 		return nil, err
 	}
@@ -209,25 +213,16 @@ func (h *Handler) AddOrganizationMember(
 		}, nil
 	}
 
-	member, err := h.orgSvc.AddMember(
-		ctx,
-		request.OrgId,
-		string(request.Body.Email),
-		request.Body.Role,
-	)
+	m, err := h.svc.AddMember(ctx, request.OrgId, string(request.Body.Email), request.Body.Role)
 	if err != nil {
 		switch {
-		case errors.Is(err, orgservice.ErrNotFound):
+		case errors.Is(err, ErrNotFound):
 			return oapi.AddOrganizationMember404ApplicationProblemPlusJSONResponse{
 				NotFoundApplicationProblemPlusJSONResponse: oapi.NotFoundApplicationProblemPlusJSONResponse(
-					httpx.Prob(
-						404,
-						"Not Found",
-						"No user with that email address exists in Horizon",
-					),
+					httpx.Prob(404, "Not Found", "No user with that email address exists in Horizon"),
 				),
 			}, nil
-		case errors.Is(err, orgservice.ErrConflict):
+		case errors.Is(err, ErrConflict):
 			return oapi.AddOrganizationMember409ApplicationProblemPlusJSONResponse{
 				ConflictApplicationProblemPlusJSONResponse: oapi.ConflictApplicationProblemPlusJSONResponse(
 					httpx.Prob(409, "Conflict", "User is already a member of this organisation"),
@@ -236,8 +231,7 @@ func (h *Handler) AddOrganizationMember(
 		}
 		return nil, err
 	}
-
-	return oapi.AddOrganizationMember201JSONResponse(member), nil
+	return oapi.AddOrganizationMember201JSONResponse(m), nil
 }
 
 func (h *Handler) UpdateOrganizationMember(
@@ -260,9 +254,9 @@ func (h *Handler) UpdateOrganizationMember(
 		}, nil
 	}
 
-	member, err := h.orgSvc.UpdateMemberRole(ctx, request.OrgId, request.UserId, request.Body.Role)
+	m, err := h.svc.UpdateMemberRole(ctx, request.OrgId, request.UserId, request.Body.Role)
 	if err != nil {
-		if errors.Is(err, orgservice.ErrNotFound) {
+		if errors.Is(err, ErrNotFound) {
 			return oapi.UpdateOrganizationMember404ApplicationProblemPlusJSONResponse{
 				NotFoundApplicationProblemPlusJSONResponse: oapi.NotFoundApplicationProblemPlusJSONResponse(
 					httpx.Prob(404, "Not Found", "Member not found"),
@@ -271,8 +265,7 @@ func (h *Handler) UpdateOrganizationMember(
 		}
 		return nil, err
 	}
-
-	return oapi.UpdateOrganizationMember200JSONResponse(member), nil
+	return oapi.UpdateOrganizationMember200JSONResponse(m), nil
 }
 
 func (h *Handler) RemoveOrganizationMember(
@@ -295,8 +288,8 @@ func (h *Handler) RemoveOrganizationMember(
 		}, nil
 	}
 
-	if err := h.orgSvc.RemoveMember(ctx, request.OrgId, request.UserId); err != nil {
-		if errors.Is(err, orgservice.ErrNotFound) {
+	if err := h.svc.RemoveMember(ctx, request.OrgId, request.UserId); err != nil {
+		if errors.Is(err, ErrNotFound) {
 			return oapi.RemoveOrganizationMember404ApplicationProblemPlusJSONResponse{
 				NotFoundApplicationProblemPlusJSONResponse: oapi.NotFoundApplicationProblemPlusJSONResponse(
 					httpx.Prob(404, "Not Found", "Member not found"),
@@ -305,6 +298,5 @@ func (h *Handler) RemoveOrganizationMember(
 		}
 		return nil, err
 	}
-
 	return oapi.RemoveOrganizationMember204Response{}, nil
 }
