@@ -2,10 +2,7 @@ package orgservice
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -50,18 +47,6 @@ func slugify(name string) string {
 		s = "org"
 	}
 	return s
-}
-
-// generateAPIKey creates a random API key and returns the raw value and its SHA-256 hash.
-func generateAPIKey() (rawKey, keyHash string, err error) {
-	b := make([]byte, 32)
-	if _, err = rand.Read(b); err != nil {
-		return "", "", fmt.Errorf("generating random bytes: %w", err)
-	}
-	rawKey = "hrz_" + hex.EncodeToString(b)
-	h := sha256.Sum256([]byte(rawKey))
-	keyHash = hex.EncodeToString(h[:])
-	return rawKey, keyHash, nil
 }
 
 // ── Organizations ─────────────────────────────────────────────────────────────
@@ -372,89 +357,6 @@ func (s *Service) RemoveMember(ctx context.Context, orgID, userID uuid.UUID) err
 	)
 	if err != nil {
 		return fmt.Errorf("removing member: %w", err)
-	}
-	n, _ := result.RowsAffected()
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-// ── API Keys ─────────────────────────────────────────────────────────────────
-
-// CreateAPIKey generates a new API key for the org.
-// The returned CreatedApiKey includes the raw key value, which is only returned once.
-func (s *Service) CreateAPIKey(
-	ctx context.Context,
-	orgID uuid.UUID,
-	name string,
-	scopes []string,
-) (oapi.CreatedApiKey, error) {
-	rawKey, keyHash, err := generateAPIKey()
-	if err != nil {
-		return oapi.CreatedApiKey{}, fmt.Errorf("generating key: %w", err)
-	}
-
-	const q = `
-		INSERT INTO api_keys (org_id, name, key_hash, scopes)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, org_id, name, scopes, created_at, updated_at
-	`
-	var (
-		k        oapi.CreatedApiKey
-		dbScopes pq.StringArray
-	)
-	err = s.db.QueryRowContext(ctx, q, orgID, name, keyHash, pq.Array(scopes)).
-		Scan(&k.Id, &k.OrgId, &k.Name, &dbScopes, &k.CreatedAt, &k.UpdatedAt)
-	if err != nil {
-		return oapi.CreatedApiKey{}, fmt.Errorf("inserting api key: %w", err)
-	}
-	k.Scopes = []string(dbScopes)
-	k.Key = rawKey
-	return k, nil
-}
-
-// ListAPIKeys returns all active (non-revoked) API keys for the org.
-func (s *Service) ListAPIKeys(ctx context.Context, orgID uuid.UUID) ([]oapi.ApiKey, error) {
-	const q = `
-		SELECT id, org_id, name, scopes, last_used_at, revoked_at, created_at, updated_at
-		FROM api_keys
-		WHERE org_id = $1 AND revoked_at IS NULL
-		ORDER BY created_at DESC
-	`
-	rows, err := s.db.QueryContext(ctx, q, orgID)
-	if err != nil {
-		return nil, fmt.Errorf("listing api keys: %w", err)
-	}
-	defer rows.Close()
-
-	var keys []oapi.ApiKey
-	for rows.Next() {
-		var (
-			k        oapi.ApiKey
-			dbScopes pq.StringArray
-		)
-		if err := rows.Scan(&k.Id, &k.OrgId, &k.Name, &dbScopes,
-			&k.LastUsedAt, &k.RevokedAt, &k.CreatedAt, &k.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scanning api key: %w", err)
-		}
-		k.Scopes = []string(dbScopes)
-		keys = append(keys, k)
-	}
-	return keys, rows.Err()
-}
-
-// RevokeAPIKey soft-deletes an API key by setting its revoked_at timestamp.
-// Returns ErrNotFound if no active key with that ID exists for the org.
-func (s *Service) RevokeAPIKey(ctx context.Context, orgID, keyID uuid.UUID) error {
-	result, err := s.db.ExecContext(
-		ctx,
-		`UPDATE api_keys SET revoked_at = NOW() WHERE id = $1 AND org_id = $2 AND revoked_at IS NULL`,
-		keyID,
-		orgID,
-	)
-	if err != nil {
-		return fmt.Errorf("revoking api key: %w", err)
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {

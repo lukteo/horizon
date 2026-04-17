@@ -18,9 +18,6 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// Service returns the underlying service so other domains can resolve identity.
-func (h *Handler) Service() *Service { return h.svc }
-
 // GetUsersMe returns the authenticated user's profile, upserting on first access.
 func (h *Handler) GetUsersMe(
 	ctx context.Context,
