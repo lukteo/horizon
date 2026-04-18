@@ -64,3 +64,9 @@ func GetClerkUserFromContext(ctx context.Context) (*clerk.User, bool) {
 	authUser, ok := ctx.Value(clerkAuthUserKey).(*clerk.User)
 	return authUser, ok
 }
+
+// WithClerkUser returns a context carrying the given Clerk user. Intended for tests
+// that need to simulate the authenticated request context without invoking Clerk.
+func WithClerkUser(ctx context.Context, u *clerk.User) context.Context {
+	return context.WithValue(ctx, clerkAuthUserKey, u)
+}

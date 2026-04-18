@@ -12,7 +12,7 @@ import (
 
 	"github.com/luketeo/horizon/generated/oapi"
 	"github.com/luketeo/horizon/internal/config"
-	"github.com/luketeo/horizon/internal/middleware"
+	"github.com/luketeo/horizon/internal/platform/middleware"
 	"github.com/luketeo/horizon/internal/web"
 )
 
